@@ -132,6 +132,9 @@ extern byte realtimeMode;           // used in getMappedPixelIndex()
 #define REVERSE      (uint16_t)0x0002
 #define SELECTED     (uint16_t)0x0001
 
+// User defined effects
+#define FX_MODE_CUSTOM_TWINKLE 666
+
 #define FX_MODE_STATIC                   0
 #define FX_MODE_BLINK                    1
 #define FX_MODE_BREATH                   2

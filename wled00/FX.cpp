@@ -10119,6 +10119,93 @@ uint16_t mode_particle1Dsonicstream(void) {
 static const char _data_FX_MODE_PS_SONICSTREAM[] PROGMEM = "PS Sonic Stream@!,!,Color,Blur,Bin,Mod,Filter,Push;,!;!;1f;c3=0,o2=1";
 #endif // WLED_DISABLE_PARTICLESYSTEM1D
 
+/************* User effect functions ****************/
+// Structure for each twinkle point
+typedef struct {
+  uint16_t speed;        // How long one cycle takes
+  int16_t step_no;       // Current step in the cycle
+  int8_t direction;      // 1 = brightening, -1 = dimming
+  uint8_t colorIndex;    // Index to color swatch
+} twinkle_point;
+
+// Color swatch from original code
+const CRGB colorSwatch[] = {
+  CRGB(153, 153, 255),  // Soft blue
+  CRGB(254, 0, 177),    // Pink
+  CRGB(0, 255, 255),    // Cyan
+  CRGB(255, 200, 50),   // Amber
+  CRGB(76, 0, 153),     // Purple
+  CRGB(255, 153, 255),  // Light pink
+  CRGB(255, 255, 153),  // Light yellow
+  CRGB(100, 200, 255)   // Sky blue
+};
+#define COLOR_SWATCH_SIZE 8
+
+uint16_t mode_custom_twinkle(void) {
+  // Constants from the original Python code
+  const uint16_t lowerTime = 15;   // 0.5s * 30fps
+  const uint16_t upperTime = 42;   // 1.4s * 30fps
+  const uint8_t flickerProb = 50;  // Probability of fast flicker
+
+  // Allocate memory for our twinkle points
+  if (!SEGENV.allocateData(sizeof(twinkle_point) * SEGLEN)) 
+    return mode_static(); // Allocation failed
+
+  twinkle_point* points = reinterpret_cast<twinkle_point*>(SEGENV.data);
+
+  // Initialize on first call
+  if (SEGENV.call == 0) {
+    for (int i = 0; i < SEGLEN; i++) {
+      // Initialize each twinkle point
+      points[i].speed = hw_random16(lowerTime, upperTime);
+      points[i].step_no = hw_random16(0, points[i].speed - lowerTime);
+      points[i].step_no = max(0, (int) points[i].step_no);
+      points[i].direction = 1;
+      points[i].colorIndex = hw_random8(COLOR_SWATCH_SIZE);
+    }
+  }
+
+  // Update each point
+  for (int i = 0; i < SEGLEN; i++) {
+    // Check if we need to change direction or start a new cycle
+    if (points[i].step_no >= points[i].speed) {
+      points[i].direction = -1;
+    } 
+    else if (points[i].direction == -1 && points[i].step_no <= 0) {
+      // Start a new cycle (equivalent to new_cycle() in Python)
+      if (hw_random8(flickerProb) == 0) {
+        points[i].speed = 5;  // Fast flicker (FPS * 0.15)
+      } else {
+        points[i].speed = hw_random16(lowerTime, upperTime);
+      }
+      points[i].step_no = 0;
+      points[i].direction = 1;
+      points[i].colorIndex = hw_random8(COLOR_SWATCH_SIZE);
+    }
+
+    // Update step
+    points[i].step_no += points[i].direction;
+
+    // Calculate brightness
+    float brightness = (float)points[i].step_no / points[i].speed;
+    
+    // Get base color from swatch
+    CRGB color = colorSwatch[points[i].colorIndex];
+    
+    // Apply brightness
+    color.r = uint8_t(color.r * brightness);
+    color.g = uint8_t(color.g * brightness);
+    color.b = uint8_t(color.b * brightness);
+    
+    // Set pixel color
+    SEGMENT.setPixelColor(i, RGBW32(color.r, color.g, color.b, 0));
+  }
+
+  return FRAMETIME;
+}
+static const char _data_FX_MODE_CUSTOM_TWINKLE[] PROGMEM = "Custom Twinkle@!,!;!,!;!";
+
+
 //////////////////////////////////////////////////////////////////////////////////////////
 // mode data
 static const char _data_RESERVED[] PROGMEM = "RSVD";
@@ -10155,6 +10242,10 @@ void WS2812FX::setupEffectData() {
     _mode.push_back(&mode_static);
     _modeData.push_back(_data_RESERVED);
   }
+
+  // User defined effects
+  addEffect(FX_MODE_CUSTOM_TWINKLE, &mode_custom_twinkle, _data_FX_MODE_CUSTOM_TWINKLE);
+  
   // now replace all pre-allocated effects
   // --- 1D non-audio effects ---
   addEffect(FX_MODE_BLINK, &mode_blink, _data_FX_MODE_BLINK);

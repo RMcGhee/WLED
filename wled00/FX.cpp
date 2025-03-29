@@ -10142,16 +10142,26 @@ const CRGB colorSwatch[] = {
 #define COLOR_SWATCH_SIZE 8
 
 uint16_t mode_custom_twinkle(void) {
-  // Constants from the original Python code
-  const uint16_t lowerTime = 15;   // 0.5s * 30fps
-  const uint16_t upperTime = 42;   // 1.4s * 30fps
-  const uint8_t flickerProb = 50;  // Probability of fast flicker
+  // Constants from the original Python code - now affected by speed
+  const uint16_t baseLowerTime = 0.5 * strip.getTargetFps();   // 0.5s * target fps
+  const uint16_t baseUpperTime = 1.4 * strip.getTargetFps();   // 1.4s * target fps
+  const uint8_t flickerProb = 50;      // Probability of fast flicker
 
   // Allocate memory for our twinkle points
   if (!SEGENV.allocateData(sizeof(twinkle_point) * SEGLEN)) 
     return mode_static(); // Allocation failed
 
   twinkle_point* points = reinterpret_cast<twinkle_point*>(SEGENV.data);
+
+  // Calculate actual time values based on speed
+  // Higher SEGMENT.speed = faster animation (lower time values)
+  uint16_t speedFactor = map(SEGMENT.speed, 0, 255, 255, 50); // Invert and scale speed value
+  uint16_t lowerTime = (baseLowerTime * speedFactor) / 255;
+  uint16_t upperTime = (baseUpperTime * speedFactor) / 255;
+  
+  // Make sure we don't get values that are too small
+  lowerTime = max((int) lowerTime, 5);
+  upperTime = max((int) upperTime, lowerTime + 5);
 
   // Initialize on first call
   if (SEGENV.call == 0) {
@@ -10174,7 +10184,8 @@ uint16_t mode_custom_twinkle(void) {
     else if (points[i].direction == -1 && points[i].step_no <= 0) {
       // Start a new cycle (equivalent to new_cycle() in Python)
       if (hw_random8(flickerProb) == 0) {
-        points[i].speed = 5;  // Fast flicker (FPS * 0.15)
+        points[i].speed = (5 * speedFactor) / 255;  // Fast flicker (FPS * 0.15)
+        points[i].speed = max((int) points[i].speed, 2);  // Ensure minimum speed
       } else {
         points[i].speed = hw_random16(lowerTime, upperTime);
       }
@@ -10192,10 +10203,16 @@ uint16_t mode_custom_twinkle(void) {
     // Get base color from swatch
     CRGB color = colorSwatch[points[i].colorIndex];
     
-    // Apply brightness
+    // Apply brightness from animation
     color.r = uint8_t(color.r * brightness);
     color.g = uint8_t(color.g * brightness);
     color.b = uint8_t(color.b * brightness);
+    
+    // Apply global brightness/intensity from SEGMENT.intensity
+    uint8_t masterBrightness = SEGMENT.intensity;
+    color.r = (color.r * masterBrightness) / 255;
+    color.g = (color.g * masterBrightness) / 255;
+    color.b = (color.b * masterBrightness) / 255;
     
     // Set pixel color
     SEGMENT.setPixelColor(i, RGBW32(color.r, color.g, color.b, 0));
@@ -10203,7 +10220,7 @@ uint16_t mode_custom_twinkle(void) {
 
   return FRAMETIME;
 }
-static const char _data_FX_MODE_CUSTOM_TWINKLE[] PROGMEM = "Custom Twinkle@!,!;!,!;!";
+static const char _data_FX_MODE_CUSTOM_TWINKLE[] PROGMEM = "Custom Twinkle@Speed;!,!;!";
 
 
 //////////////////////////////////////////////////////////////////////////////////////////

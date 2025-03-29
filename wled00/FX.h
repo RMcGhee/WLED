@@ -133,7 +133,7 @@ extern byte realtimeMode;           // used in getMappedPixelIndex()
 #define SELECTED     (uint16_t)0x0001
 
 // User defined effects
-#define FX_MODE_CUSTOM_TWINKLE 666
+#define FX_MODE_CUSTOM_TWINKLE 255
 
 #define FX_MODE_STATIC                   0
 #define FX_MODE_BLINK                    1
@@ -354,7 +354,7 @@ extern byte realtimeMode;           // used in getMappedPixelIndex()
 #define FX_MODE_PS1DGEQ                212
 #define FX_MODE_PSFIRE1D               213
 #define FX_MODE_PS1DSONICSTREAM        214
-#define MODE_COUNT                     215
+#define MODE_COUNT                     216
 
 
 #define BLEND_STYLE_FADE            0x00  // universal

@@ -1432,7 +1432,7 @@ function readState(s,command=false)
 	if (s.success) return true; // no data to process
 
 	isOn = s.on;
-	gId('sliderBri').value = s.bri;
+	gId('sliderBri').value = Math.round(s.bri / 255 * 10);
 	nlA = s.nl.on;
 	nlDur = s.nl.dur;
 	nlTar = s.nl.tbri;
@@ -2414,7 +2414,7 @@ function setPalette(paletteId = null)
 
 function setBri()
 {
-	var obj = {"bri": parseInt(gId('sliderBri').value)};
+	var obj = {"bri": Math.round(parseInt(gId('sliderBri').value) / 10 * 255)};
 	requestJson(obj);
 }
 

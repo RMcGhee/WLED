@@ -26,6 +26,8 @@ var pmt = 1, pmtLS = 0, pmtLast = 0;
 var lastinfo = {};
 var isM = false, mw = 0, mh=0;
 var ws, wsRpt=0;
+
+const BRIGHTNESS_SCALE = 8;
 var cfg = {
 	theme:{base:"dark", bg:{url:"", rnd: false, rndGrayscale: false, rndBlur: false}, alpha:{bg:0.6,tab:0.8}, color:{bg:""}},
 	comp :{colors:{picker: true, rgb: false, quick: true, hex: false},
@@ -291,6 +293,10 @@ function onLoad()
 		});
 	});
 	resetUtil();
+
+	const slider = document.getElementById("sliderBri");
+  slider.max = BRIGHTNESS_SCALE;  // set the max from JS
+  slider.value = Math.round(slider.max / 2);
 
 	d.addEventListener("visibilitychange", handleVisibilityChange, false);
 	//size();
@@ -1432,7 +1438,7 @@ function readState(s,command=false)
 	if (s.success) return true; // no data to process
 
 	isOn = s.on;
-	gId('sliderBri').value = Math.round(s.bri / 255 * 10);
+	gId('sliderBri').value = Math.round(s.bri / 255 * BRIGHTNESS_SCALE);
 	nlA = s.nl.on;
 	nlDur = s.nl.dur;
 	nlTar = s.nl.tbri;
@@ -2414,7 +2420,7 @@ function setPalette(paletteId = null)
 
 function setBri()
 {
-	var obj = {"bri": Math.round(parseInt(gId('sliderBri').value) / 10 * 255)};
+	var obj = {"bri": Math.round(parseInt(gId('sliderBri').value) / BRIGHTNESS_SCALE * 255)};
 	requestJson(obj);
 }
 

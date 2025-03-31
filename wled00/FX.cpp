@@ -10308,6 +10308,9 @@ typedef struct {
   uint16_t n_pixels_per_strand; // Number of pixels per strand
   int16_t* map;            // Mapping array for pixel positions
   uint16_t map_length;     // Length of the map array
+  uint16_t pause_duration; // Duration of the pause at endpoints
+  uint16_t pause_timer;    // Timer for tracking pauses
+  bool is_paused;          // Flag to track if animation is in a paused state
 } cylon_data;
 
 uint16_t mode_custom_cylon(void) {
@@ -10317,6 +10320,7 @@ uint16_t mode_custom_cylon(void) {
   // Calculate base speed and overscan from Python constants
   const uint16_t base_speed = 0.05 * fps;
   const uint16_t base_overscan = 0 * base_speed; // In the Python code, this is 0
+  const uint16_t base_pause_duration = 0.10 * fps; // Tenth second pause at endpoints
   
   // Get the number of strands
   uint16_t n_strands = BusManager::getNumBusses();
@@ -10342,6 +10346,9 @@ uint16_t mode_custom_cylon(void) {
     data->position = 0.0f;
     data->n_pixels_per_strand = pixels_per_strand;
     data->map_length = map_size;
+    data->pause_duration = base_pause_duration;
+    data->pause_timer = 0;
+    data->is_paused = true; // Start paused at beginning
     
     // Set up the map immediately after the struct in memory
     data->map = reinterpret_cast<int16_t*>(SEGENV.data + sizeof(cylon_data));
@@ -10357,44 +10364,57 @@ uint16_t mode_custom_cylon(void) {
   }
   
   // Adjust speed based on SEGMENT.speed setting (0-255)
-  // For smoother animation, we'll use smaller steps
   float adjusted_speed = map(SEGMENT.speed, 0, 255, base_speed * 2.0f, base_speed / 4.0f);
   
-  // Check for direction change
-  if (data->cycle >= adjusted_speed) {
-    data->direction = -1;
-  } else if (data->cycle <= 0.0f) {
-    data->direction = 1;
+  // Adjust pause duration based on speed
+  uint16_t adjusted_pause = map(SEGMENT.speed, 0, 255, data->pause_duration / 2, data->pause_duration * 2);
+  
+  // Handle pausing at endpoints
+  if (data->is_paused) {
+    data->pause_timer++;
+    
+    if (data->pause_timer >= adjusted_pause) {
+      data->is_paused = false;
+      data->pause_timer = 0;
+    }
+  } else {
+    // Check for direction change and pause conditions
+    if (data->cycle >= adjusted_speed) {
+      data->direction = -1;
+      data->is_paused = true;
+      data->pause_timer = 0;
+    } else if (data->cycle <= 0.0f) {
+      data->direction = 1;
+      data->is_paused = true;
+      data->pause_timer = 0;
+    }
   }
   
-  // Clear all pixels
-  for (int i = 0; i < SEGLEN; i++) {
-    SEGMENT.setPixelColor(i, 0);
+  // Only move when not paused
+  if (!data->is_paused) {
+    // For very smooth animation on short strands, use a smaller increment
+    float movement_step;
+    if (pixels_per_strand < 30) {
+      // For short strands, use a much smaller increment
+      movement_step = 0.05f * data->direction;
+    } else if (pixels_per_strand < 60) {
+      // Medium strands
+      movement_step = 0.1f * data->direction;
+    } else {
+      // Longer strands - can use a slightly larger step
+      movement_step = 0.2f * data->direction;
+    }
+    
+    // Update cycle counter with smoother step
+    data->cycle += movement_step;
   }
   
   // Calculate current position - use floating point for smoother animation
   data->position = (data->cycle * data->map_length) / adjusted_speed;
   
-  // For very smooth animation on short strands, use a smaller increment
-  float movement_step;
-  if (pixels_per_strand < 30) {
-    // For short strands, use a much smaller increment
-    movement_step = 0.05f * data->direction;
-  } else if (pixels_per_strand < 60) {
-    // Medium strands
-    movement_step = 0.1f * data->direction;
-  } else {
-    // Longer strands - can use a slightly larger step
-    movement_step = 0.2f * data->direction;
-  }
-  
-  // Update cycle counter with smoother step
-  data->cycle += movement_step;
-  
-  // Check if position is valid
-  if (data->position >= data->map_length || data->position < 0) {
-    return FRAMETIME;
-  }
+  // Clamp position to valid range to prevent flickering at endpoints
+  if (data->position < 0) data->position = 0;
+  if (data->position >= data->map_length) data->position = data->map_length - 0.01f;
   
   // Get color from palette or use default red
   uint32_t color;

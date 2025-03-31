@@ -134,6 +134,8 @@ extern byte realtimeMode;           // used in getMappedPixelIndex()
 
 // User defined effects
 #define FX_MODE_CUSTOM_TWINKLE 255
+#define FX_MODE_CUSTOM_SCORCHED 255
+#define FX_MODE_CUSTOM_CYLON 255
 
 #define FX_MODE_STATIC                   0
 #define FX_MODE_BLINK                    1

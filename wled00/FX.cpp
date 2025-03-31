@@ -10223,6 +10223,233 @@ uint16_t mode_custom_twinkle(void) {
 static const char _data_FX_MODE_CUSTOM_TWINKLE[] PROGMEM = "Custom Twinkle@Speed;!,!;!";
 
 
+/******* Scorched earth style effect *******/
+// Helper function for cosine wave (input in radians, output 0-1.0)
+float cos_clamped(float radians) {
+  return (cos(radians) + 1.0f) / 2.0f;
+}
+typedef struct {
+  uint32_t cycle;          // Current cycle count
+  uint16_t speed;          // Animation speed for wave movement
+  uint16_t color_change;   // Cycles till color iteration
+  uint8_t curr_r;          // Current base red component
+  uint8_t curr_g;          // Current base green component
+  uint8_t curr_b;          // Current base blue component
+} scorched_data;
+
+uint16_t mode_custom_scorched(void) {
+  // Get FPS for timing calculations
+  uint16_t fps = strip.getTargetFps();
+  
+  // Constants converted from Python
+  const uint16_t base_speed = 0.07 * fps;  // Time for wave to go side to side
+  const uint16_t color_change = 1000;      // Number of cycles till color iteration
+
+  // Allocate memory for our effect data
+  if (!SEGENV.allocateData(sizeof(scorched_data))) 
+    return mode_static(); // Allocation failed
+
+  scorched_data* data = reinterpret_cast<scorched_data*>(SEGENV.data);
+  
+  // Initialize on first call
+  if (SEGENV.call == 0) {
+    data->cycle = 0;
+    data->speed = base_speed;
+    data->color_change = color_change;
+    data->curr_r = 255;
+    data->curr_g = 0;
+    data->curr_b = 255;
+  }
+  
+  // Calculate speed based on segment speed setting
+  data->speed = (base_speed * (256 - SEGMENT.speed)) / 128; // Adjust speed based on SEGMENT.speed
+  data->speed = max((uint16_t)1, data->speed); // Ensure minimum speed value
+  
+  // Apply color cycling
+  float cycle_radians = (float)(data->cycle % 100000) * 2 * PI / data->color_change;
+  uint8_t r = data->curr_r * cos_clamped(cycle_radians);
+  uint8_t g = data->curr_g * cos_clamped(cycle_radians + (0.25 * 2 * PI));
+  uint8_t b = data->curr_b * cos_clamped(cycle_radians + (0.5 * 2 * PI));
+  
+  // Apply master brightness from SEGMENT.intensity
+  uint8_t masterBrightness = SEGMENT.intensity;
+  r = (r * masterBrightness) / 255;
+  g = (g * masterBrightness) / 255;
+  b = (b * masterBrightness) / 255;
+  
+  // Update each pixel
+  for (int i = 0; i < SEGLEN; i++) {
+    // Calculate wave pattern
+    float wave_pos = (float)(i + (data->cycle / data->speed)) * 2 * PI / 30;
+    
+    uint8_t pixel_r = r * cos_clamped(wave_pos);
+    uint8_t pixel_g = g * cos_clamped(wave_pos);
+    uint8_t pixel_b = b * cos_clamped(wave_pos);
+    
+    // Set pixel color
+    SEGMENT.setPixelColor(i, RGBW32(pixel_r, pixel_g, pixel_b, 0));
+  }
+  
+  // Increment cycle counter
+  data->cycle++;
+  if (data->cycle >= 100000) data->cycle = 0;
+  
+  return FRAMETIME;
+}
+static const char _data_FX_MODE_CUSTOM_SCORCHED[] PROGMEM = "Custom Scorched@Speed;!,!;!";
+
+
+typedef struct {
+  int16_t cycle;            // Current position in cycle
+  int8_t direction;         // Direction of movement (1 or -1)
+  uint16_t speed;           // Animation speed
+  uint16_t overscan;        // Overscan period
+  uint16_t position;        // Current position
+  uint16_t n_pixels_per_strand; // Number of pixels per strand
+  int16_t* map;             // Mapping array for pixel positions
+  uint16_t map_length;      // Length of the map array
+} cylon_data;
+
+uint16_t mode_custom_cylon(void) {
+  // Get FPS for timing calculations
+  uint16_t fps = strip.getTargetFps();
+  
+  // Calculate base speed and overscan from Python constants
+  const uint16_t base_speed = 1.6 * fps;
+  const uint16_t base_overscan = 0 * base_speed; // In the Python code, this is 0
+  
+  // Get the number of strands
+  uint16_t n_strands = BusManager::getNumBusses();
+  
+  // Calculate pixels per strand
+  uint16_t pixels_per_strand = SEGLEN / max((uint16_t) 1, n_strands);
+  
+  // Allocate memory for our effect data and map
+  uint16_t map_size = pixels_per_strand + (2 * base_overscan);
+  size_t data_size = sizeof(cylon_data) + (map_size * sizeof(int16_t));
+  
+  if (!SEGENV.allocateData(data_size)) 
+    return mode_static(); // Allocation failed
+
+  cylon_data* data = reinterpret_cast<cylon_data*>(SEGENV.data);
+  
+  // Initialize on first call
+  if (SEGENV.call == 0) {
+    data->cycle = 0;
+    data->direction = 1;
+    data->speed = base_speed;
+    data->overscan = base_overscan;
+    data->position = 0;
+    data->n_pixels_per_strand = pixels_per_strand;
+    data->map_length = map_size;
+    
+    // Set up the map immediately after the struct in memory
+    data->map = reinterpret_cast<int16_t*>(SEGENV.data + sizeof(cylon_data));
+    
+    // Initialize map values as in Python code
+    for (int i = 0; i < data->map_length; i++) {
+      if (i < data->overscan || i >= (data->overscan + data->n_pixels_per_strand)) {
+        data->map[i] = -1;
+      } else {
+        data->map[i] = i - data->overscan;
+      }
+    }
+  }
+  
+  // Adjust speed based on SEGMENT.speed setting (0-255)
+  uint16_t adjusted_speed = map(SEGMENT.speed, 0, 255, base_speed * 2, base_speed / 2);
+  
+  // Check for direction change
+  if (data->cycle >= adjusted_speed) {
+    data->direction = -1;
+  } else if (data->cycle <= 0) {
+    data->direction = 1;
+  }
+  
+  // Clear all pixels
+  for (int i = 0; i < SEGLEN; i++) {
+    SEGMENT.setPixelColor(i, 0);
+  }
+  
+  // Calculate current position
+  data->position = ((data->cycle * data->map_length) / adjusted_speed);
+  
+  // Update cycle counter
+  data->cycle += data->direction;
+  
+  // Check if position is valid
+  if (data->position >= data->map_length) {
+    return FRAMETIME;
+  }
+  
+  // Get color from palette or use default red
+  uint32_t color;
+  if (SEGMENT.palette) {
+    color = SEGMENT.color_from_palette(0, false, false, 0);
+  } else {
+    color = RGBW32(255, 0, 0, 0); // Default Cylon red color
+  }
+  
+  // Extract RGB components
+  uint8_t r = (color >> 16) & 0xFF;
+  uint8_t g = (color >> 8) & 0xFF;
+  uint8_t b = color & 0xFF;
+  
+  // Calculate trail colors
+  uint8_t trail1_r = r / 3;
+  uint8_t trail1_g = g / 3;
+  uint8_t trail1_b = b / 3;
+  
+  uint8_t trail2_r = r / 7;
+  uint8_t trail2_g = g / 7;
+  uint8_t trail2_b = b / 7;
+  
+  // Apply master brightness
+  uint8_t bri = SEGMENT.intensity;
+  r = (r * bri) / 255;
+  g = (g * bri) / 255;
+  b = (b * bri) / 255;
+  
+  trail1_r = (trail1_r * bri) / 255;
+  trail1_g = (trail1_g * bri) / 255;
+  trail1_b = (trail1_b * bri) / 255;
+  
+  trail2_r = (trail2_r * bri) / 255;
+  trail2_g = (trail2_g * bri) / 255;
+  trail2_b = (trail2_b * bri) / 255;
+  
+  // Get mapped position
+  int16_t map_pos = data->map[data->position];
+  
+  // Update pixels for each strand
+  for (uint16_t strand = 0; strand < n_strands; strand++) {
+    uint16_t strand_offset = strand * data->n_pixels_per_strand;
+    
+    if (map_pos >= 0) {
+      // Set main pixel
+      SEGMENT.setPixelColor(strand_offset + map_pos, RGBW32(r, g, b, 0));
+      
+      // Set trail pixels
+      if (map_pos >= 1) {
+        SEGMENT.setPixelColor(strand_offset + map_pos - 1, RGBW32(trail1_r, trail1_g, trail1_b, 0));
+      }
+      if (map_pos < data->n_pixels_per_strand - 1) {
+        SEGMENT.setPixelColor(strand_offset + map_pos + 1, RGBW32(trail1_r, trail1_g, trail1_b, 0));
+      }
+      if (map_pos >= 2) {
+        SEGMENT.setPixelColor(strand_offset + map_pos - 2, RGBW32(trail2_r, trail2_g, trail2_b, 0));
+      }
+      if (map_pos < data->n_pixels_per_strand - 2) {
+        SEGMENT.setPixelColor(strand_offset + map_pos + 2, RGBW32(trail2_r, trail2_g, trail2_b, 0));
+      }
+    }
+  }
+  
+  return FRAMETIME;
+}
+static const char _data_FX_MODE_CUSTOM_CYLON[] PROGMEM = "Custom Cylon@Speed,Intensity;!,!;!";
+
+
 //////////////////////////////////////////////////////////////////////////////////////////
 // mode data
 static const char _data_RESERVED[] PROGMEM = "RSVD";
@@ -10262,6 +10489,8 @@ void WS2812FX::setupEffectData() {
 
   // User defined effects
   addEffect(FX_MODE_CUSTOM_TWINKLE, &mode_custom_twinkle, _data_FX_MODE_CUSTOM_TWINKLE);
+  addEffect(FX_MODE_CUSTOM_SCORCHED, &mode_custom_scorched, _data_FX_MODE_CUSTOM_SCORCHED);
+  addEffect(FX_MODE_CUSTOM_CYLON, &mode_custom_cylon, _data_FX_MODE_CUSTOM_CYLON);
   
   // now replace all pre-allocated effects
   // --- 1D non-audio effects ---

@@ -10300,14 +10300,14 @@ static const char _data_FX_MODE_CUSTOM_SCORCHED[] PROGMEM = "Custom Scorched@Spe
 
 
 typedef struct {
-  int16_t cycle;            // Current position in cycle
-  int8_t direction;         // Direction of movement (1 or -1)
-  uint16_t speed;           // Animation speed
-  uint16_t overscan;        // Overscan period
-  uint16_t position;        // Current position
+  float cycle;             // Current position in cycle (float for smoother animation)
+  int8_t direction;        // Direction of movement (1 or -1)
+  uint16_t speed;          // Animation speed
+  uint16_t overscan;       // Overscan period
+  float position;          // Current position (float for sub-pixel animation)
   uint16_t n_pixels_per_strand; // Number of pixels per strand
-  int16_t* map;             // Mapping array for pixel positions
-  uint16_t map_length;      // Length of the map array
+  int16_t* map;            // Mapping array for pixel positions
+  uint16_t map_length;     // Length of the map array
 } cylon_data;
 
 uint16_t mode_custom_cylon(void) {
@@ -10315,7 +10315,7 @@ uint16_t mode_custom_cylon(void) {
   uint16_t fps = strip.getTargetFps();
   
   // Calculate base speed and overscan from Python constants
-  const uint16_t base_speed = 1.6 * fps;
+  const uint16_t base_speed = 0.05 * fps;
   const uint16_t base_overscan = 0 * base_speed; // In the Python code, this is 0
   
   // Get the number of strands
@@ -10335,11 +10335,11 @@ uint16_t mode_custom_cylon(void) {
   
   // Initialize on first call
   if (SEGENV.call == 0) {
-    data->cycle = 0;
+    data->cycle = 0.0f;
     data->direction = 1;
     data->speed = base_speed;
     data->overscan = base_overscan;
-    data->position = 0;
+    data->position = 0.0f;
     data->n_pixels_per_strand = pixels_per_strand;
     data->map_length = map_size;
     
@@ -10357,12 +10357,13 @@ uint16_t mode_custom_cylon(void) {
   }
   
   // Adjust speed based on SEGMENT.speed setting (0-255)
-  uint16_t adjusted_speed = map(SEGMENT.speed, 0, 255, base_speed * 2, base_speed / 2);
+  // For smoother animation, we'll use smaller steps
+  float adjusted_speed = map(SEGMENT.speed, 0, 255, base_speed * 2.0f, base_speed / 4.0f);
   
   // Check for direction change
   if (data->cycle >= adjusted_speed) {
     data->direction = -1;
-  } else if (data->cycle <= 0) {
+  } else if (data->cycle <= 0.0f) {
     data->direction = 1;
   }
   
@@ -10371,14 +10372,27 @@ uint16_t mode_custom_cylon(void) {
     SEGMENT.setPixelColor(i, 0);
   }
   
-  // Calculate current position
-  data->position = ((data->cycle * data->map_length) / adjusted_speed);
+  // Calculate current position - use floating point for smoother animation
+  data->position = (data->cycle * data->map_length) / adjusted_speed;
   
-  // Update cycle counter
-  data->cycle += data->direction;
+  // For very smooth animation on short strands, use a smaller increment
+  float movement_step;
+  if (pixels_per_strand < 30) {
+    // For short strands, use a much smaller increment
+    movement_step = 0.05f * data->direction;
+  } else if (pixels_per_strand < 60) {
+    // Medium strands
+    movement_step = 0.1f * data->direction;
+  } else {
+    // Longer strands - can use a slightly larger step
+    movement_step = 0.2f * data->direction;
+  }
+  
+  // Update cycle counter with smoother step
+  data->cycle += movement_step;
   
   // Check if position is valid
-  if (data->position >= data->map_length) {
+  if (data->position >= data->map_length || data->position < 0) {
     return FRAMETIME;
   }
   
@@ -10395,58 +10409,73 @@ uint16_t mode_custom_cylon(void) {
   uint8_t g = (color >> 8) & 0xFF;
   uint8_t b = color & 0xFF;
   
-  // Calculate trail colors
-  uint8_t trail1_r = r / 3;
-  uint8_t trail1_g = g / 3;
-  uint8_t trail1_b = b / 3;
-  
-  uint8_t trail2_r = r / 7;
-  uint8_t trail2_g = g / 7;
-  uint8_t trail2_b = b / 7;
-  
-  // Apply master brightness
-  uint8_t bri = SEGMENT.intensity;
-  r = (r * bri) / 255;
-  g = (g * bri) / 255;
-  b = (b * bri) / 255;
-  
-  trail1_r = (trail1_r * bri) / 255;
-  trail1_g = (trail1_g * bri) / 255;
-  trail1_b = (trail1_b * bri) / 255;
-  
-  trail2_r = (trail2_r * bri) / 255;
-  trail2_g = (trail2_g * bri) / 255;
-  trail2_b = (trail2_b * bri) / 255;
-  
-  // Get mapped position
-  int16_t map_pos = data->map[data->position];
+  // Get base map position (integer part)
+  int16_t int_pos = floor(data->position);
+  float frac = data->position - int_pos; // Fractional part for interpolation
   
   // Update pixels for each strand
   for (uint16_t strand = 0; strand < n_strands; strand++) {
     uint16_t strand_offset = strand * data->n_pixels_per_strand;
     
-    if (map_pos >= 0) {
-      // Set main pixel
-      SEGMENT.setPixelColor(strand_offset + map_pos, RGBW32(r, g, b, 0));
+    // Get current integer pixel position
+    int16_t map_pos = -1;
+    if (int_pos >= 0 && int_pos < data->map_length) {
+      map_pos = data->map[int_pos];
+    }
+    
+    // Get next pixel position for interpolation
+    int16_t next_map_pos = -1;
+    if (int_pos + 1 >= 0 && int_pos + 1 < data->map_length) {
+      next_map_pos = data->map[int_pos + 1];
+    }
+    
+    // For smoother animation, we'll use a Gaussian-like brightness profile
+    auto gaussianFalloff = [](float distance) -> float {
+      return exp(-(distance * distance) / 0.8f);
+    };
+    
+    // Apply brightness to all affected pixels
+    for (int16_t i = 0; i < data->n_pixels_per_strand; i++) {
+      if (i < 0 || i >= data->n_pixels_per_strand) continue;
       
-      // Set trail pixels
-      if (map_pos >= 1) {
-        SEGMENT.setPixelColor(strand_offset + map_pos - 1, RGBW32(trail1_r, trail1_g, trail1_b, 0));
+      // Calculate distance from center of the animation (in pixel units)
+      float distance;
+      
+      if (map_pos >= 0 && next_map_pos >= 0) {
+        // Interpolate between pixels for sub-pixel animation
+        float interp_pos = map_pos * (1.0f - frac) + next_map_pos * frac;
+        distance = abs(i - interp_pos);
+      } else if (map_pos >= 0) {
+        distance = abs(i - map_pos);
+      } else {
+        continue; // No valid position
       }
-      if (map_pos < data->n_pixels_per_strand - 1) {
-        SEGMENT.setPixelColor(strand_offset + map_pos + 1, RGBW32(trail1_r, trail1_g, trail1_b, 0));
-      }
-      if (map_pos >= 2) {
-        SEGMENT.setPixelColor(strand_offset + map_pos - 2, RGBW32(trail2_r, trail2_g, trail2_b, 0));
-      }
-      if (map_pos < data->n_pixels_per_strand - 2) {
-        SEGMENT.setPixelColor(strand_offset + map_pos + 2, RGBW32(trail2_r, trail2_g, trail2_b, 0));
-      }
+      
+      // Calculate brightness based on distance
+      float brightness = gaussianFalloff(distance);
+      
+      // Don't bother with very dim pixels
+      if (brightness < 0.01f) continue;
+      
+      // Apply brightness to RGB values
+      uint8_t pixel_r = r * brightness;
+      uint8_t pixel_g = g * brightness;
+      uint8_t pixel_b = b * brightness;
+      
+      // Apply master brightness
+      uint8_t bri = SEGMENT.intensity;
+      pixel_r = (pixel_r * bri) / 255;
+      pixel_g = (pixel_g * bri) / 255;
+      pixel_b = (pixel_b * bri) / 255;
+      
+      // Set pixel color
+      SEGMENT.setPixelColor(strand_offset + i, RGBW32(pixel_r, pixel_g, pixel_b, 0));
     }
   }
   
   return FRAMETIME;
 }
+
 static const char _data_FX_MODE_CUSTOM_CYLON[] PROGMEM = "Custom Cylon@Speed,Intensity;!,!;!";
 
 

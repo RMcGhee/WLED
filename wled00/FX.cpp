@@ -10319,8 +10319,8 @@ uint16_t mode_custom_cylon(void) {
   
   // Calculate base speed and overscan from Python constants
   const uint16_t base_speed = 0.05 * fps;
-  const uint16_t base_overscan = 0 * base_speed; // In the Python code, this is 0
-  const uint16_t base_pause_duration = 0.10 * fps; // Tenth second pause at endpoints
+  const uint16_t base_overscan = 0 * base_speed;
+  const uint16_t base_pause_duration = 0.0 * fps; // Tenth second pause at endpoints
   
   // Get the number of strands
   uint16_t n_strands = BusManager::getNumBusses();
@@ -10380,10 +10380,12 @@ uint16_t mode_custom_cylon(void) {
   } else {
     // Check for direction change and pause conditions
     if (data->cycle >= adjusted_speed) {
+      data->cycle = adjusted_speed;
       data->direction = -1;
       data->is_paused = true;
       data->pause_timer = 0;
     } else if (data->cycle <= 0.0f) {
+      data->cycle = 0.0f;
       data->direction = 1;
       data->is_paused = true;
       data->pause_timer = 0;

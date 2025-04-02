@@ -10300,123 +10300,59 @@ static const char _data_FX_MODE_CUSTOM_SCORCHED[] PROGMEM = "Custom Scorched@Spe
 
 
 typedef struct {
-  float cycle;             // Current position in cycle (float for smoother animation)
-  int8_t direction;        // Direction of movement (1 or -1)
-  uint16_t speed;          // Animation speed
-  uint16_t overscan;       // Overscan period
-  float position;          // Current position (float for sub-pixel animation)
-  uint16_t n_pixels_per_strand; // Number of pixels per strand
-  int16_t* map;            // Mapping array for pixel positions
-  uint16_t map_length;     // Length of the map array
-  uint16_t pause_duration; // Duration of the pause at endpoints
-  uint16_t pause_timer;    // Timer for tracking pauses
-  bool is_paused;          // Flag to track if animation is in a paused state
+  int8_t direction;         // Direction of movement -1 || 1
+  uint16_t speed;           // Animation speed
+  float scan_time;          // scan time
+  uint16_t overscan;        // cycles to overscan
+  uint16_t map_max;         // because we can overscan, used to calculate mu
+  int16_t cycle_min;        // - overscan
+  uint16_t cycle_max;       // ((2seconds * fps) * (seg.speed / 128)) + overscan
+  int16_t cycle_pos;       // [-overscan : cycle_max] = number of ticks per cycle leg (like 240 + overscan) 
+  uint16_t n_strands;       // number of strands
+  uint16_t pixels_per_strand; // Number of pixels per strand
 } cylon_data;
 
 uint16_t mode_custom_cylon(void) {
   // Get FPS for timing calculations
   uint16_t fps = strip.getTargetFps();
   
-  // Calculate base speed and overscan from Python constants
-  const uint16_t base_speed = 0.05 * fps;
-  const uint16_t base_overscan = 0 * base_speed;
-  const uint16_t base_pause_duration = 0.0 * fps; // Tenth second pause at endpoints
-  
-  // Get the number of strands
-  uint16_t n_strands = BusManager::getNumBusses();
-  
-  // Calculate pixels per strand
-  uint16_t pixels_per_strand = SEGLEN / max((uint16_t) 1, n_strands);
+  // Scan time in seconds (not counting overscan)
+  const float base_scan_time = 2.0;
   
   // Allocate memory for our effect data and map
-  uint16_t map_size = pixels_per_strand + (2 * base_overscan);
-  size_t data_size = sizeof(cylon_data) + (map_size * sizeof(int16_t));
+  size_t data_size = sizeof(cylon_data);
   
   if (!SEGENV.allocateData(data_size)) 
     return mode_static(); // Allocation failed
 
   cylon_data* data = reinterpret_cast<cylon_data*>(SEGENV.data);
+
+  /**
+   * overscan: [0:40]
+   * direction = -1, 1
+   * scan_time: base_scan_time * (seg.speed / 128)
+   * map_max: (scan_time * fps)
+   * cycle_max: map_max + overscan
+   * cycle_pos: [-overscan : cycle_max] = number of ticks per cycle leg (like 240 + overscan)
+   * pixels_per_strand: SEGLEN / n_strands
+   * mapped_cycle_pos (mu) = (cycle_pos / map_max) * pixels_per_strand
+   * calculate each pixel brightness (1.0 max) via exp ( ( -(pixel_pos - mu)^2 ) / 0.8 )
+   * apply each pixel brightness via pixel_pos, pixel_pos + pixels_per_strand * num_strands
+   */
   
   // Initialize on first call
   if (SEGENV.call == 0) {
-    data->cycle = 0.0f;
+    uint16_t speedFactor = map(SEGMENT.speed, 0, 255, 255, 15); // Invert speed scale
     data->direction = 1;
-    data->speed = base_speed;
-    data->overscan = base_overscan;
-    data->position = 0.0f;
-    data->n_pixels_per_strand = pixels_per_strand;
-    data->map_length = map_size;
-    data->pause_duration = base_pause_duration;
-    data->pause_timer = 0;
-    data->is_paused = true; // Start paused at beginning
-    
-    // Set up the map immediately after the struct in memory
-    data->map = reinterpret_cast<int16_t*>(SEGENV.data + sizeof(cylon_data));
-    
-    // Initialize map values as in Python code
-    for (int i = 0; i < data->map_length; i++) {
-      if (i < data->overscan || i >= (data->overscan + data->n_pixels_per_strand)) {
-        data->map[i] = -1;
-      } else {
-        data->map[i] = i - data->overscan;
-      }
-    }
+    data->n_strands = BusManager::getNumBusses();
+    data->pixels_per_strand = (uint16_t) (SEGLEN / data->n_strands);
+    data->scan_time = base_scan_time * (speedFactor / 128.0);
+    data->map_max = data->scan_time * fps;
+    data->overscan = data->map_max * (2.0 / data->pixels_per_strand); // 2 pixels of overscan
+    data->cycle_min = -data->overscan;
+    data->cycle_max = (data->scan_time * fps) + data->overscan;
+    data->cycle_pos = data->cycle_min;
   }
-  
-  // Adjust speed based on SEGMENT.speed setting (0-255)
-  float adjusted_speed = map(SEGMENT.speed, 0, 255, base_speed * 2.0f, base_speed / 4.0f);
-  
-  // Adjust pause duration based on speed
-  uint16_t adjusted_pause = map(SEGMENT.speed, 0, 255, data->pause_duration / 2, data->pause_duration * 2);
-  
-  // Handle pausing at endpoints
-  if (data->is_paused) {
-    data->pause_timer++;
-    
-    if (data->pause_timer >= adjusted_pause) {
-      data->is_paused = false;
-      data->pause_timer = 0;
-    }
-  } else {
-    // Check for direction change and pause conditions
-    if (data->cycle >= adjusted_speed) {
-      data->cycle = adjusted_speed;
-      data->direction = -1;
-      data->is_paused = true;
-      data->pause_timer = 0;
-    } else if (data->cycle <= 0.0f) {
-      data->cycle = 0.0f;
-      data->direction = 1;
-      data->is_paused = true;
-      data->pause_timer = 0;
-    }
-  }
-  
-  // Only move when not paused
-  if (!data->is_paused) {
-    // For very smooth animation on short strands, use a smaller increment
-    float movement_step;
-    if (pixels_per_strand < 30) {
-      // For short strands, use a much smaller increment
-      movement_step = 0.05f * data->direction;
-    } else if (pixels_per_strand < 60) {
-      // Medium strands
-      movement_step = 0.1f * data->direction;
-    } else {
-      // Longer strands - can use a slightly larger step
-      movement_step = 0.2f * data->direction;
-    }
-    
-    // Update cycle counter with smoother step
-    data->cycle += movement_step;
-  }
-  
-  // Calculate current position - use floating point for smoother animation
-  data->position = (data->cycle * data->map_length) / adjusted_speed;
-  
-  // Clamp position to valid range to prevent flickering at endpoints
-  if (data->position < 0) data->position = 0;
-  if (data->position >= data->map_length) data->position = data->map_length - 0.01f;
   
   // Get color from palette or use default red
   uint32_t color;
@@ -10430,75 +10366,44 @@ uint16_t mode_custom_cylon(void) {
   uint8_t r = (color >> 16) & 0xFF;
   uint8_t g = (color >> 8) & 0xFF;
   uint8_t b = color & 0xFF;
-  
-  // Get base map position (integer part)
-  int16_t int_pos = floor(data->position);
-  float frac = data->position - int_pos; // Fractional part for interpolation
+
+  // AKA mu ~[0.0, pixels_per_strand - 1.0]
+  const float mapped_cycle_pos = ((float) data->cycle_pos / data->map_max) * (data->pixels_per_strand - 1.0);
+  const float master_brightness = ((float) strip.getBrightness()) / 256;
   
   // Update pixels for each strand
-  for (uint16_t strand = 0; strand < n_strands; strand++) {
-    uint16_t strand_offset = strand * data->n_pixels_per_strand;
-    
-    // Get current integer pixel position
-    int16_t map_pos = -1;
-    if (int_pos >= 0 && int_pos < data->map_length) {
-      map_pos = data->map[int_pos];
-    }
-    
-    // Get next pixel position for interpolation
-    int16_t next_map_pos = -1;
-    if (int_pos + 1 >= 0 && int_pos + 1 < data->map_length) {
-      next_map_pos = data->map[int_pos + 1];
-    }
-    
-    // For smoother animation, we'll use a Gaussian-like brightness profile
-    auto gaussianFalloff = [](float distance) -> float {
-      return exp(-(distance * distance) / 0.8f);
+  for (uint16_t pixel_pos = 0; pixel_pos < data->pixels_per_strand; pixel_pos++) {
+    // Gaussian-like brightness profile, where p_pos is the position of the pixel we're calculating (like 4 of 50)
+    auto gaussianFalloff = [mapped_cycle_pos](uint16_t p_pos) -> float {
+      return exp( -pow( (p_pos - mapped_cycle_pos) , 2) / 0.6f);
     };
+    float brightness = gaussianFalloff(pixel_pos) * master_brightness;
     
-    // Apply brightness to all affected pixels
-    for (int16_t i = 0; i < data->n_pixels_per_strand; i++) {
-      if (i < 0 || i >= data->n_pixels_per_strand) continue;
+    // Below 1% pixel is off.
+    if (brightness < 0.01f) brightness = 0.0;
       
-      // Calculate distance from center of the animation (in pixel units)
-      float distance;
-      
-      if (map_pos >= 0 && next_map_pos >= 0) {
-        // Interpolate between pixels for sub-pixel animation
-        float interp_pos = map_pos * (1.0f - frac) + next_map_pos * frac;
-        distance = abs(i - interp_pos);
-      } else if (map_pos >= 0) {
-        distance = abs(i - map_pos);
-      } else {
-        continue; // No valid position
-      }
-      
-      // Calculate brightness based on distance
-      float brightness = gaussianFalloff(distance);
-      
-      // Don't bother with very dim pixels
-      if (brightness < 0.01f) continue;
-      
-      // Apply brightness to RGB values
-      uint8_t pixel_r = r * brightness;
-      uint8_t pixel_g = g * brightness;
-      uint8_t pixel_b = b * brightness;
-      
-      // Apply master brightness
-      uint8_t bri = SEGMENT.intensity;
-      pixel_r = (pixel_r * bri) / 255;
-      pixel_g = (pixel_g * bri) / 255;
-      pixel_b = (pixel_b * bri) / 255;
-      
+    // Apply brightness to RGB values
+    uint8_t pixel_r = r * brightness;
+    uint8_t pixel_g = g * brightness;
+    uint8_t pixel_b = b * brightness;
+    
+    // Apply brightness to the same pixel in each strand
+    for (uint16_t pixel = pixel_pos; pixel < SEGLEN; pixel += data->pixels_per_strand) {
       // Set pixel color
-      SEGMENT.setPixelColor(strand_offset + i, RGBW32(pixel_r, pixel_g, pixel_b, 0));
+      SEGMENT.setPixelColor(pixel, RGBW32(pixel_r, pixel_g, pixel_b, 0));
     }
+  }
+
+  data->cycle_pos += data->direction;
+  if (data->cycle_pos < data->cycle_min || data->cycle_pos > data->cycle_max) {
+    data->direction *= -1;
+    data->cycle_pos += (2 * data->direction);
   }
   
   return FRAMETIME;
 }
 
-static const char _data_FX_MODE_CUSTOM_CYLON[] PROGMEM = "Custom Cylon@Speed,Intensity;!,!;!";
+static const char _data_FX_MODE_CUSTOM_CYLON[] PROGMEM = "Custom Cylon@Speed;!,!;!";
 
 
 //////////////////////////////////////////////////////////////////////////////////////////

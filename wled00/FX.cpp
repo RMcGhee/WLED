@@ -10317,7 +10317,7 @@ uint16_t mode_custom_cylon(void) {
   uint16_t fps = strip.getTargetFps();
   
   // Scan time in seconds (not counting overscan)
-  const float base_scan_time = 2.0;
+  const float base_scan_time = 0.9;
   
   // Allocate memory for our effect data and map
   size_t data_size = sizeof(cylon_data);
@@ -10348,7 +10348,7 @@ uint16_t mode_custom_cylon(void) {
     data->pixels_per_strand = (uint16_t) (SEGLEN / data->n_strands);
     data->scan_time = base_scan_time * (speedFactor / 128.0);
     data->map_max = data->scan_time * fps;
-    data->overscan = data->map_max * (2.0 / data->pixels_per_strand); // 2 pixels of overscan
+    data->overscan = data->map_max * (1.5 / data->pixels_per_strand); // 1.5 pixels of overscan
     data->cycle_min = -data->overscan;
     data->cycle_max = (data->scan_time * fps) + data->overscan;
     data->cycle_pos = data->cycle_min;
@@ -10403,7 +10403,7 @@ uint16_t mode_custom_cylon(void) {
   return FRAMETIME;
 }
 
-static const char _data_FX_MODE_CUSTOM_CYLON[] PROGMEM = "Custom Cylon@Speed;!,!;!";
+static const char _data_FX_MODE_CUSTOM_CYLON[] PROGMEM = "Custom Cylon@Speed;!,!;ix=0";
 
 
 //////////////////////////////////////////////////////////////////////////////////////////
